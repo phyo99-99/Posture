@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Posture Monitor</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .log-entry {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 12px;
+            border-bottom: 1px solid #ddd;
+            font-family: 'Arial', sans-serif;
+            font-size: 1rem;
+        }
+
+        .log-time {
+            color: #555;
+            font-weight: bold;
+        }
+
+        .log-posture {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-weight: bold;
+        }
+
+        .log-entry.normal .log-posture {
+            background-color: #d4edda;
+            color: #155724;
+        }
+
+        .log-entry.forward .log-posture,
+        .log-entry["forward head"] .log-posture {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <header>
+        <h1>Welcome, {{ user.name }} 👋</h1>
+        <p class="session-info">Session duration: <span id="sessionDuration">{{ session_duration }}</span> minutes</p>
+        <button id="resetSession" class="reset-btn">Reset Session</button>
+    </header>
+
+    <div class="dashboard">
+        <div class="video-section">
+            <h2>📹 Live Posture Tracking</h2>
+            <div class="video-container">
+                <img src="{{ url_for('video_feed') }}" width="640" height="480">
+            </div>
+            <div class="posture-status">
+                <div class="status-icon {{ current_posture|lower }}"></div>
+                <h3>Current: <span id="currentPosture">{{ current_posture }}</span></h3>
+            </div>
+        </div>
+
+        <div class="analytics-section">
+            <div class="stat-card">
+                <h2>📊 Posture Analytics</h2>
+                <div class="chart-container">
+                    <canvas id="postureChart"></canvas>
+                </div>
+            </div>
+
+            <div class="stat-card">
+                <h2>📋 Posture Log</h2>
+                <div class="log-container">
+                    <ul id="postureLog">
+                        {% if log %}
+                            {% for entry in log %}
+                                <li class="log-entry {{ entry.posture|lower }}">
+                                    <span class="log-time">🕒 {{ entry.time }}</span>
+                                    <span class="log-posture">{{ entry.posture|capitalize }}</span>
+                                </li>
+                            {% endfor %}
+                        {% else %}
+                            <li class="log-entry text-muted">No posture changes recorded yet.</li>
+                        {% endif %}
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="tips-section">
+        <h2>💡 Posture Tips</h2>
+        <div class="tips-container">
+            <div class="tip">
+                <h3>Keep your head up</h3>
+                <p>Your ears should be in line with your shoulders.</p>
+            </div>
+            <div class="tip">
+                <h3>Relax your shoulders</h3>
+                <p>Keep them back and down, not hunched up.</p>
+            </div>
+            <div class="tip">
+                <h3>Take regular breaks</h3>
+                <p>Stand up and stretch every 30 minutes.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    function getPostureColor(posture) {
+        posture = posture.toLowerCase();
+        if (posture === "normal") return '#4CAF50';
+        if (posture === "forward" || posture === "forward head") return '#F44336';
+
+        let hash = 0;
+        for (let i = 0; i < posture.length; i++) {
+            hash = posture.charCodeAt(i) + ((hash << 5) - hash);
+        }
+        let color = '#';
+        for (let i = 0; i < 3; i++) {
+            const value = (hash >> (i * 8)) & 0xFF;
+            color += ('00' + value.toString(16)).substr(-2);
+        }
+        return color;
+    }
+
+    const ctx = document.getElementById('postureChart').getContext('2d');
+    const postureTypes = {{ posture_types|tojson }};
+    const chartData = [];
+    const chartColors = [];
+
+    postureTypes.forEach(type => {
+        chartData.push({{ posture_stats|tojson }}[type] || 0);
+        chartColors.push(getPostureColor(type));
+    });
+
+    const postureChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: postureTypes,
+            datasets: [{
+                data: chartData,
+                backgroundColor: chartColors,
+                borderWidth: 0
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { position: 'bottom' }
+            }
+        }
+    });
+
+    setInterval(function () {
+        fetch('/stats')
+            .then(response => response.json())
+            .then(data => {
+                const postureLabel = data.current_posture === "normal" ? "✅ Normal" : "⚠️ Forward";
+                document.getElementById('currentPosture').textContent = postureLabel;
+
+                document.getElementById('sessionDuration').textContent = data.session_duration;
+                const statusElement = document.querySelector('.status-icon');
+                statusElement.className = 'status-icon ' + data.current_posture.toLowerCase();
+
+                const newPostureTypes = data.posture_types;
+                postureChart.data.labels = newPostureTypes;
+
+                const newData = [];
+                const newColors = [];
+
+                newPostureTypes.forEach(type => {
+                    newData.push(data.posture_stats[type] || 0);
+                    newColors.push(getPostureColor(type));
+                });
+
+                postureChart.data.datasets[0].data = newData;
+                postureChart.data.datasets[0].backgroundColor = newColors;
+                postureChart.update();
+            });
+    }, 5000);
+
+    document.getElementById('resetSession').addEventListener('click', function () {
+        fetch('/reset')
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    document.getElementById('postureLog').innerHTML = '';
+                    postureChart.data.datasets[0].data = [];
+                    postureChart.update();
+                    document.getElementById('sessionDuration').textContent = '0';
+                    document.getElementById('currentPosture').textContent = 'Detecting...';
+                }
+            });
+    });
+</script>
+</body>
+</html>
